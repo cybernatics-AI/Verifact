@@ -14,6 +14,15 @@
 (define-constant err-future-date (err u108))
 (define-constant max-string-length u256)
 
+;; Event Types as UTF-8 strings
+(define-constant EVENT-ISSUER-ADDED u"issuer-added")
+(define-constant EVENT-ISSUER-REMOVED u"issuer-removed")
+(define-constant EVENT-ISSUER-UPDATED u"issuer-updated")
+(define-constant EVENT-CREDENTIAL-ISSUED u"credential-issued")
+(define-constant EVENT-CREDENTIAL-REVOKED u"credential-revoked")
+(define-constant EVENT-CREDENTIAL-UPDATED u"credential-updated")
+(define-constant EVENT-CREDENTIAL-TRANSFERRED u"credential-transfer")
+
 ;; Data Variables
 (define-data-var credential-counter uint u0)
 
@@ -42,7 +51,7 @@
     }
 )
 
-;; New map for recipient credentials
+;; Map for recipient credentials
 (define-map RecipientCredentials
     { recipient: principal, credential-type: (string-utf8 256) }
     (list 100 uint)
@@ -115,7 +124,7 @@
     )
 )
 
-;; New helper function to add credential to recipient's list
+;; Private helper function to add credential to recipient's list
 (define-private (add-to-recipient-credentials (recipient principal) (credential-type (string-utf8 256)) (credential-id uint))
     (let
         (
@@ -142,12 +151,37 @@
                 credential-count: u0
             }
         )
-        (emit-event "issuer-added" none)
+        (emit-event EVENT-ISSUER-ADDED none)
         (ok true)
     )
 )
 
-;; New function to update credential metadata
+(define-public (remove-issuer (issuer principal))
+    (begin
+        (asserts! (is-contract-owner) err-owner-only)
+        (asserts! (is-some (map-get? Issuers issuer)) err-invalid-params)
+        (map-delete Issuers issuer)
+        (emit-event EVENT-ISSUER-REMOVED none)
+        (ok true)
+    )
+)
+
+(define-public (update-issuer-status (issuer principal) (active bool))
+    (begin
+        (asserts! (is-contract-owner) err-owner-only)
+        (match (map-get? Issuers issuer)
+            issuer-data (begin
+                (map-set Issuers issuer
+                    (merge issuer-data { active: active })
+                )
+                (emit-event EVENT-ISSUER-UPDATED none)
+                (ok true)
+            )
+            err-invalid-params
+        )
+    )
+)
+
 (define-public (update-credential-metadata 
     (credential-id uint)
     (new-metadata-hash (string-ascii 64)))
@@ -161,14 +195,13 @@
                     version: (+ (get version credential) u1)
                 })
             )
-            (emit-event "credential-updated" (some credential-id))
+            (emit-event EVENT-CREDENTIAL-UPDATED (some credential-id))
             (ok true)
         )
         err-invalid-credential
     )
 )
 
-;; Enhanced issue-credential function with additional validation
 (define-public (issue-credential
     (recipient principal)
     (credential-type (string-utf8 256))
@@ -201,12 +234,26 @@
         (var-set credential-counter credential-id)
         (increment-issuer-credential-count tx-sender)
         (add-to-recipient-credentials recipient credential-type credential-id)
-        (emit-event "credential-issued" (some credential-id))
+        (emit-event EVENT-CREDENTIAL-ISSUED (some credential-id))
         (ok credential-id)
     )
 )
 
-;; Enhanced transfer with additional checks
+(define-public (revoke-credential (credential-id uint))
+    (match (map-get? Credentials credential-id)
+        credential (begin
+            (asserts! (is-eq (get issuer credential) tx-sender) err-not-authorized)
+            (asserts! (not (get revoked credential)) err-revoked)
+            (map-set Credentials credential-id
+                (merge credential { revoked: true })
+            )
+            (emit-event EVENT-CREDENTIAL-REVOKED (some credential-id))
+            (ok true)
+        )
+        err-invalid-credential
+    )
+)
+
 (define-public (transfer-credential-ownership (credential-id uint) (new-owner principal))
     (match (map-get? Credentials credential-id)
         credential (begin
@@ -218,14 +265,35 @@
                 (merge credential { recipient: new-owner })
             )
             (add-to-recipient-credentials new-owner (get credential-type credential) credential-id)
-            (emit-event "credential-transferred" (some credential-id))
+            (emit-event EVENT-CREDENTIAL-TRANSFERRED (some credential-id))
             (ok true)
         )
         err-invalid-credential
     )
 )
 
-;; New read-only functions
+;; Read-only Functions
+(define-read-only (get-credential-by-id (credential-id uint))
+    (match (map-get? Credentials credential-id)
+        credential (ok credential)
+        err-invalid-credential
+    )
+)
+
+(define-read-only (verify-credential (credential-id uint))
+    (match (map-get? Credentials credential-id)
+        credential (ok (not (get revoked credential)))
+        err-invalid-credential
+    )
+)
+
+(define-read-only (get-issuer-status (issuer principal))
+    (match (map-get? Issuers issuer)
+        issuer-data (ok (get active issuer-data))
+        (ok false)
+    )
+)
+
 (define-read-only (get-recipient-credentials (recipient principal) (credential-type (string-utf8 256)))
     (ok (default-to (list) (map-get? RecipientCredentials { recipient: recipient, credential-type: credential-type })))
 )
