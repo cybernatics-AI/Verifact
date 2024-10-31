@@ -12,6 +12,7 @@
 (define-constant err-expired (err u106))
 (define-constant err-self-transfer (err u107))
 (define-constant err-future-date (err u108))
+(define-constant err-event-error (err u109))
 (define-constant max-string-length u256)
 
 ;; Event Types as UTF-8 strings
@@ -98,11 +99,14 @@
 
 (define-private (increment-issuer-credential-count (issuer principal))
     (match (map-get? Issuers issuer)
-        issuer-data (map-set Issuers 
-            issuer
-            (merge issuer-data { credential-count: (+ (get credential-count issuer-data) u1) })
+        issuer-data (begin
+            (map-set Issuers 
+                issuer
+                (merge issuer-data { credential-count: (+ (get credential-count issuer-data) u1) })
+            )
+            (ok true)
         )
-        false
+        (err err-invalid-params)
     )
 )
 
@@ -111,16 +115,17 @@
         (
             (new-id (+ (var-get last-event-id) u1))
         )
-        (map-set Events new-id
+        (var-set last-event-id new-id)
+        (if (map-set Events new-id
             {
                 event-type: event-type,
                 credential-id: credential-id,
                 principal: tx-sender,
                 timestamp: block-height
-            }
+            })
+            (ok true)
+            (err err-event-error)
         )
-        (var-set last-event-id new-id)
-        (ok new-id)
     )
 )
 
@@ -131,9 +136,11 @@
             (key { recipient: recipient, credential-type: credential-type })
             (existing-list (default-to (list) (map-get? RecipientCredentials key)))
         )
-        (map-set RecipientCredentials
+        (if (map-set RecipientCredentials
             key
-            (unwrap-panic (as-max-len? (append existing-list credential-id) u100))
+            (unwrap-panic (as-max-len? (append existing-list credential-id) u100)))
+            (ok true)
+            (err err-invalid-params)
         )
     )
 )
@@ -143,15 +150,15 @@
     (begin
         (asserts! (is-contract-owner) err-owner-only)
         (asserts! (is-none (map-get? Issuers issuer)) err-already-exists)
-        (map-set Issuers issuer
+        (asserts! (map-set Issuers issuer
             {
                 active: true,
                 name: name,
                 added-at: block-height,
                 credential-count: u0
             }
-        )
-        (emit-event EVENT-ISSUER-ADDED none)
+        ) err-invalid-params)
+        (print EVENT-ISSUER-ADDED)
         (ok true)
     )
 )
@@ -161,7 +168,7 @@
         (asserts! (is-contract-owner) err-owner-only)
         (asserts! (is-some (map-get? Issuers issuer)) err-invalid-params)
         (map-delete Issuers issuer)
-        (emit-event EVENT-ISSUER-REMOVED none)
+        (print EVENT-ISSUER-REMOVED)
         (ok true)
     )
 )
@@ -171,10 +178,10 @@
         (asserts! (is-contract-owner) err-owner-only)
         (match (map-get? Issuers issuer)
             issuer-data (begin
-                (map-set Issuers issuer
+                (asserts! (map-set Issuers issuer
                     (merge issuer-data { active: active })
-                )
-                (emit-event EVENT-ISSUER-UPDATED none)
+                ) err-invalid-params)
+                (print EVENT-ISSUER-UPDATED)
                 (ok true)
             )
             err-invalid-params
@@ -189,13 +196,13 @@
         credential (begin
             (asserts! (is-eq (get issuer credential) tx-sender) err-not-authorized)
             (asserts! (not (get revoked credential)) err-revoked)
-            (map-set Credentials credential-id
+            (asserts! (map-set Credentials credential-id
                 (merge credential { 
                     metadata-hash: new-metadata-hash,
                     version: (+ (get version credential) u1)
                 })
-            )
-            (emit-event EVENT-CREDENTIAL-UPDATED (some credential-id))
+            ) err-invalid-params)
+            (print EVENT-CREDENTIAL-UPDATED)
             (ok true)
         )
         err-invalid-credential
@@ -219,7 +226,7 @@
             true
         )
         
-        (map-set Credentials credential-id
+        (asserts! (map-set Credentials credential-id
             {
                 recipient: recipient,
                 issuer: tx-sender,
@@ -230,11 +237,11 @@
                 revoked: false,
                 version: u1
             }
-        )
+        ) err-invalid-params)
         (var-set credential-counter credential-id)
-        (increment-issuer-credential-count tx-sender)
-        (add-to-recipient-credentials recipient credential-type credential-id)
-        (emit-event EVENT-CREDENTIAL-ISSUED (some credential-id))
+        (asserts! (is-ok (increment-issuer-credential-count tx-sender)) err-invalid-params)
+        (asserts! (is-ok (add-to-recipient-credentials recipient credential-type credential-id)) err-invalid-params)
+        (print EVENT-CREDENTIAL-ISSUED)
         (ok credential-id)
     )
 )
@@ -244,10 +251,10 @@
         credential (begin
             (asserts! (is-eq (get issuer credential) tx-sender) err-not-authorized)
             (asserts! (not (get revoked credential)) err-revoked)
-            (map-set Credentials credential-id
+            (asserts! (map-set Credentials credential-id
                 (merge credential { revoked: true })
-            )
-            (emit-event EVENT-CREDENTIAL-REVOKED (some credential-id))
+            ) err-invalid-params)
+            (print EVENT-CREDENTIAL-REVOKED)
             (ok true)
         )
         err-invalid-credential
@@ -261,11 +268,11 @@
             (asserts! (not (get revoked credential)) err-revoked)
             (asserts! (not (is-credential-expired credential-id)) err-expired)
             (asserts! (not (is-eq new-owner tx-sender)) err-self-transfer)
-            (map-set Credentials credential-id
+            (asserts! (map-set Credentials credential-id
                 (merge credential { recipient: new-owner })
-            )
-            (add-to-recipient-credentials new-owner (get credential-type credential) credential-id)
-            (emit-event EVENT-CREDENTIAL-TRANSFERRED (some credential-id))
+            ) err-invalid-params)
+            (asserts! (is-ok (add-to-recipient-credentials new-owner (get credential-type credential) credential-id)) err-invalid-params)
+            (print EVENT-CREDENTIAL-TRANSFERRED)
             (ok true)
         )
         err-invalid-credential
