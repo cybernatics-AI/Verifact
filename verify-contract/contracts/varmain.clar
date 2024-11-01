@@ -13,6 +13,8 @@
 (define-constant err-self-transfer (err u107))
 (define-constant err-future-date (err u108))
 (define-constant err-event-error (err u109))
+(define-constant err-invalid-name (err u110))
+(define-constant err-invalid-metadata (err u111))
 (define-constant max-string-length u256)
 
 ;; Event Types as UTF-8 strings
@@ -87,6 +89,21 @@
     (< block-height date)
 )
 
+(define-private (is-valid-name (name (string-utf8 64)))
+    (and
+        (>= (len name) u1)
+        (<= (len name) u64)
+        (not (is-eq name u""))
+    )
+)
+
+(define-private (is-valid-metadata-hash (hash (string-ascii 64)))
+    (and
+        (is-eq (len hash) u64)
+        (not (is-eq hash ""))
+    )
+)
+
 (define-private (is-credential-expired (credential-id uint))
     (match (map-get? Credentials credential-id)
         credential (match (get expiry-date credential)
@@ -150,6 +167,7 @@
     (begin
         (asserts! (is-contract-owner) err-owner-only)
         (asserts! (is-none (map-get? Issuers issuer)) err-already-exists)
+        (asserts! (is-valid-name name) err-invalid-name)
         (asserts! (map-set Issuers issuer
             {
                 active: true,
@@ -192,20 +210,23 @@
 (define-public (update-credential-metadata 
     (credential-id uint)
     (new-metadata-hash (string-ascii 64)))
-    (match (map-get? Credentials credential-id)
-        credential (begin
-            (asserts! (is-eq (get issuer credential) tx-sender) err-not-authorized)
-            (asserts! (not (get revoked credential)) err-revoked)
-            (asserts! (map-set Credentials credential-id
-                (merge credential { 
-                    metadata-hash: new-metadata-hash,
-                    version: (+ (get version credential) u1)
-                })
-            ) err-invalid-params)
-            (print EVENT-CREDENTIAL-UPDATED)
-            (ok true)
+    (begin
+        (asserts! (is-valid-metadata-hash new-metadata-hash) err-invalid-metadata)
+        (match (map-get? Credentials credential-id)
+            credential (begin
+                (asserts! (is-eq (get issuer credential) tx-sender) err-not-authorized)
+                (asserts! (not (get revoked credential)) err-revoked)
+                (asserts! (map-set Credentials credential-id
+                    (merge credential { 
+                        metadata-hash: new-metadata-hash,
+                        version: (+ (get version credential) u1)
+                    })
+                ) err-invalid-params)
+                (print EVENT-CREDENTIAL-UPDATED)
+                (ok true)
+            )
+            err-invalid-credential
         )
-        err-invalid-credential
     )
 )
 
@@ -221,6 +242,9 @@
         (asserts! (is-authorized-issuer tx-sender) err-not-authorized)
         (asserts! (>= (len credential-type) u1) err-invalid-params)
         (asserts! (<= (len credential-type) max-string-length) err-invalid-params)
+        (asserts! (is-valid-metadata-hash metadata-hash) err-invalid-metadata)
+        
+        ;; Validate expiry date if provided
         (match expiry-date
             expiry (asserts! (is-valid-future-date expiry) err-future-date)
             true
