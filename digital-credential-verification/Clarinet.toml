@@ -1,0 +1,37 @@
+[project]
+name = "digital-credential-verification"
+authors = ["Amobi Ndubuisi"]
+description = "A modular digital credential verification system on Stacks"
+telemetry = true
+cache_dir = ".cache"
+requirements = []
+
+[contracts.utilities]
+path = "contracts/utilities.clar"
+depends_on = []
+
+[contracts.event-module]
+path = "contracts/event-module.clar"
+depends_on = []
+
+[contracts.digital-credentials]
+path = "contracts/digital-credentials.clar"
+depends_on = ["utilities", "event-module"]
+
+[contracts.issuer-management]
+path = "contracts/issuer-management.clar"
+depends_on = ["utilities", "event-module", "digital-credentials"]
+
+[contracts.credential-operations]
+path = "contracts/credential-operations.clar"
+depends_on = ["utilities", "event-module", "digital-credentials", "issuer-management"]
+clarity_version = 3
+epoch = 3.0
+[repl.analysis]
+passes = ['check_checker']
+
+[repl.analysis.check_checker]
+strict = false
+trusted_sender = false
+trusted_caller = false
+callee_filter = false
